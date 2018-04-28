@@ -1,440 +1,307 @@
-var Anticaptcha = function(clientKey, usePrecaching) {
-    return new function(clientKey, usePrecaching) {
-        usePrecaching = !!usePrecaching; // false by default
+/*
+
+'iMacros example for Recaptcha 2 solving
+VERSION BUILD=844 RECORDER=CR
+'
+URL GOTO=https://antcpt.com/rus/demo-form/recaptcha-2.html
+'
+' Insert your Anti-Captcha API key here
+SET antiCaptchaApiKey YOUR-ANTI-CAPTCHA-API-KEY
+'
+' Fetch Anti-Captcha API key in TEXTAREA.g-recaptcha-response element
+TAG POS=1 TYPE=TEXTAREA ATTR=CLASS:g-recaptcha-response CONTENT={{antiCaptchaApiKey}}
+' Or you can place the API key in DIV#anticaptcha-imacros-account-key, it will also work
+'URL GOTO=javascript:(function(){var<SP>d=document.getElementById("anticaptcha-imacros-account-key");d||(d=document.createElement("div"),d.innerHTML="{{antiCaptchaApiKey}}",d.style.display="none",d.id="anticaptcha-imacros-account-key",document.body.appendChild(d))})();
+'
+' Include recaptcha.js file with all the functional
+URL GOTO=javascript:(function(){var<SP>s=document.createElement("script");s.src="https://cdn.antcpt.com/imacros_inclusion/recaptcha.js?"+Math.random();document.body.appendChild(s);})();
+'
+' Further goes the same code as if you use AntiCaptcha extension
+'
+' Fill the text field with test value
+TAG POS=1 TYPE=INPUT:TEXT FORM=NAME:recaptcha_demo_form ATTR=NAME:demo_text CONTENT=iMacros<SP>test<SP>message
+'
+' Most important part: we wait 120 seconds until an AntiCatcha indicator 
+' with class "antigate_solver" gets in additional "solved" class
+SET !TIMEOUT_STEP 120
+TAG POS=1 TYPE=DIV ATTR=CLASS:"*antigate_solver*solved*"
+'
+' Send form
+TAG POS=1 TYPE=INPUT:SUBMIT FORM=NAME:recaptcha_demo_form ATTR=TYPE:submit
+
+*/
+
+// location.origin polyfill for IE
+if (!window.location.origin) {
+    window.location.origin = window.location.protocol + "//" 
+        + window.location.hostname 
+        + (window.location.port ? ':' + window.location.port : '');
+}
+
+/*jquery inclusion>*/
+var s = document.createElement("script");
+s.src = "https://code.jquery.com/jquery-1.12.4.min.js";
+document.body.appendChild(s);
+/*<jquery inclusion*/
+
+/*anticaptcha inclusion>*/
+var s = document.createElement("script");
+s.src = "https://cdn.antcpt.com/imacros_inclusion/anticaptcha/anticaptcha.js?" + Math.random();
+document.body.appendChild(s);
+/*<anticaptcha inclusion*/
+
+// myJquery
+/*
+var $$ = function() {
+    var myJquery = {};
+    myJquery.getById = function(id) {
+        return document.getElementById(id);
+    }
+    myJquery.getByClassName = function(id) {
+        var elements = document.getElementsByClassName();
+        // todo: do more
+    }
+    return myJquery;
+}
+*/
+
+function getIframeSiteKey(iframeUrl) {
+    return iframeUrl.replace(/.*k=([^&]+)&.*/, '$1');
+}
+
+var $antigateSolver;
+var $gRecaptchaResponse;
+var $gRecaptchaFrameContainer;
+
+var taskInProcessOfSolution = false;
+
+var checkModulesLoadedInterval = setInterval(function() {
+    
+    // console.log('checkModulesLoadedInterval');
+    
+    if (typeof Anticaptcha != 'undefined' && typeof jQuery != 'undefined') {
+        clearInterval(checkModulesLoadedInterval);
+        $.noConflict();
+        // console.log(Anticaptcha);
+
+        $antigateSolver = jQuery();
+        $gRecaptchaResponse =  jQuery();
+        $gRecaptchaFrameContainer = jQuery();
+
+        // new method of getting Anti-Captcha API key
+        var ACCOUNT_KEY_HERE = jQuery('#anticaptcha-imacros-account-key').html();
         
-        this.params = {
-            host: 'api.anti-captcha.com',
-            port: 80,
-            clientKey: clientKey,
-
-            // reCAPTCHA 2
-            websiteUrl: null,
-            websiteKey: null,
-            websiteSToken: null,
-            proxyType: 'http',
-            proxyAddress: null,
-            proxyPort: null,
-            proxyLogin: null,
-            proxyPassword: null,
-            userAgent: '',
-            cookies: '',
-
-            // FunCaptcha
-            websitePublicKey: null,
-
-            // image
-            phrase: null,
-            case: null,
-            numeric: null,
-            math: null,
-            minLength: null,
-            maxLength: null,
-
-            // CustomCaptcha
-            imageUrl: null,
-            assignment: null,
-            forms: null,
-
-            softId: '838',
-            languagePool: null
-        };
-
-        var connectionTimeout = 20,
-            firstAttemptWaitingInterval = 5,
-            normalWaitingInterval = 2;
-
-        this.getBalance = function (cb) {
-            var postData = {
-                clientKey: this.params.clientKey
-            };
-
-            this.jsonPostRequest('getBalance', postData, function (err, jsonResult) {
-                if (err) {
-                    return cb(err, null, jsonResult);
-                }
-
-                cb(null, jsonResult.balance, jsonResult);
-            });
-        };
-
-        this.createTask = function (cb, type, taskData) {
-            type = typeof type == 'undefined' ? 'NoCaptchaTask' : type;
-            var taskPostData = this.getPostData(type);
-            taskPostData.type = type;
-
-            // Merge incoming and already fetched taskData, incoming data has priority
-            if (typeof taskData == 'object') {
-                for (var i in taskData) {
-                    taskPostData[i] = taskData[i];
-                }
-            }
-
-            var postData = {
-                clientKey: this.params.clientKey,
-                task: taskPostData,
-                softId: this.params.softId !== null ? this.params.softId : 0
-            };
-
-            if (this.params.languagePool !== null) {
-                postData.languagePool = this.params.languagePool;
-            }
-
-            this.jsonPostRequest('createTask', postData, function (err, jsonResult) {
-                if (err) {
-                    return cb(err, null, jsonResult);
-                }
-
-                // Task created
-                var taskId = jsonResult.taskId;
-
-                cb(null, taskId, jsonResult);
-            });
-        };
-
-        this.createTaskProxyless = function (cb) {
-            this.createTask(cb, 'NoCaptchaTaskProxyless');
-        };
-
-        this.createFunCaptchaTask = function(cb) {
-            this.createTask(cb, 'FunCaptchaTask');
-        };
-
-        this.createImageToTextTask = function (taskData, cb) {
-            this.createTask(cb, 'ImageToTextTask', taskData);
-        };
-
-        this.createCustomCaptchaTask = function (cb) {
-            this.createTask(cb, 'CustomCaptchaTask');
-        };
-
-        this.getTaskRawResult = function(jsonResult) {
-            if (typeof jsonResult.solution.gRecaptchaResponse != 'undefined') {
-                return jsonResult.solution.gRecaptchaResponse;
-            } else if (typeof jsonResult.solution.token != 'undefined') {
-                return jsonResult.solution.token;
-            } else if (typeof jsonResult.solution.answers != 'undefined') {
-                return jsonResult.solution.answers;
-            } else {
-                return jsonResult.solution.text;
-            }
+        // old one
+        if (!ACCOUNT_KEY_HERE) {
+            ACCOUNT_KEY_HERE = jQuery('.g-recaptcha-response').val();
         }
 
-        this.getTaskSolution = function (taskId, cb, currentAttempt, tickCb) {
-            currentAttempt = currentAttempt || 0;
+        // Go, baby!
+        // searching for recaptcha every second
+        setInterval(function () {
+            //document.body.style.backgroundColor = 'orange';
 
-            var postData = {
-                clientKey: this.params.clientKey,
-                taskId: taskId
-            };
-            
-            var waitingInterval;
-            if (currentAttempt == 0) {
-                waitingInterval = firstAttemptWaitingInterval;
-            } else {
-                waitingInterval = normalWaitingInterval;
-            }
+            jQuery('.g-recaptcha-response:not([anticaptured])').each(function () {
+                var $gRecaptchaResponseLocal = jQuery(this); // textarea.g-recaptcha-response
 
-            if (usePrecaching) {
-                waitingInterval = 1;
-            }
+                $gRecaptchaResponseLocal.show();
 
-            console.log('Waiting %s seconds', waitingInterval);
+                // find iframe
+                var $recaptchaIframe = $gRecaptchaResponseLocal.parent().find('iframe');
+                if (!$recaptchaIframe.length || !$recaptchaIframe.attr('src')) {
+                    return;
+                }
 
-            var that = this;
+                // get siteKey
+                var iframeUrl = parseUrl($recaptchaIframe.attr('src'));
+                var siteKey = getIframeSiteKey(iframeUrl.search); //iframeUrl.search.replace(/.*k=([^&]+)&.*/, '$1');
+                if (!siteKey || iframeUrl.search == siteKey) { // Couldn't get parameter K from url
+                    return;
+                }
+                
+                // decode and trim possible spaces
+                siteKey = jQuery.trim(decodeURIComponent(siteKey));
 
-            setTimeout(function() {
-                that.jsonPostRequest('getTaskResult', postData, function (err, jsonResult) {
+                var stoken = null;
+                if (iframeUrl.search.indexOf('stoken=') != -1) {
+                    stoken = iframeUrl.search.replace(/.*stoken=([^&]+)&?.*/, '$1');
+                }
+                
+                // do not try to handle this textarea anymore
+                $gRecaptchaResponseLocal.attr('anticaptured', 'anticaptured');
+
+                var $gRecaptchaFrameContainerLocal = $gRecaptchaResponseLocal.prev('div');
+                var $gRecaptchaContainerLocal = $gRecaptchaResponseLocal.parent();
+                $gRecaptchaContainerLocal.height('auto');
+
+                $gRecaptchaContainerLocal.append('<div class="antigate_solver">AntiCaptcha</div>');
+                var $antigateSolverOne = $gRecaptchaContainerLocal.find('.antigate_solver');
+
+                // Globals
+                // solver messages
+                $antigateSolver = $antigateSolver.add($antigateSolverOne);
+                // solution textarea
+                $gRecaptchaResponse = $gRecaptchaResponse.add($gRecaptchaResponseLocal);
+                // paint blue flag
+                $gRecaptchaFrameContainer = $gRecaptchaFrameContainer.add($gRecaptchaFrameContainerLocal);
+
+                if (taskInProcessOfSolution) {
+                    return;
+                }
+
+                taskInProcessOfSolution = true;
+
+                var anticaptcha = Anticaptcha(ACCOUNT_KEY_HERE);
+
+                // recaptcha key from target website
+                anticaptcha.setWebsiteURL(window.location.origin);
+                anticaptcha.setWebsiteKey(siteKey); // 12345678901234567890123456789012
+                if (stoken) {
+                    anticaptcha.setWebsiteSToken(stoken);
+                }
+                anticaptcha.setSoftId(838);
+                
+                $antigateSolver.removeClass('error');
+
+                // browser header parameters
+                anticaptcha.setUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.116");
+
+                anticaptcha.createTaskProxyless(function (err, taskId) {
                     if (err) {
-                        return cb(err, null, jsonResult);
+                        $antigateSolver.removeClass().addClass('antigate_solver').addClass('error').text(err.message);
+                        console.error(err);
+                        return;
                     }
 
-                    if (jsonResult.status == 'processing') {
-                        // Every call I'm ticki-ing
-                        if (tickCb) {
-                            tickCb();
+                    $antigateSolver.text('Solving is in process...');
+                    $antigateSolver.addClass('in_process');
+                    // console.log(taskId);
+
+                    anticaptcha.getTaskSolution(taskId, function (err, taskSolution) {
+                        if (err) {
+                            $antigateSolver.removeClass().addClass('antigate_solver').addClass('error').text(err.message);
+                            console.error(err);
+                            return;
                         }
-                        return that.getTaskSolution(taskId, cb, currentAttempt + 1, tickCb);
-                    } else if (jsonResult.status == 'ready') {
-                        return cb(
-                            null,
-                            that.getTaskRawResult(jsonResult),
-                            jsonResult
-                        );
-                    }
-                });
-            }, waitingInterval * 1000);
-        };
 
-        this.getPostData = function(type) {
-            switch (type) {
-                case 'CustomCaptchaTask':
-                    return {
-                        imageUrl:       this.params.imageUrl,
-                        assignment:     this.params.assignment,
-                        forms:          this.params.forms
-                    };
-                case 'ImageToTextTask':
-                    return {
-                        phrase:         this.params.phrase,
-                        case:           this.params.case,
-                        numeric:        this.params.numeric,
-                        math:           this.params.math,
-                        minLength:      this.params.minLength,
-                        maxLength:      this.params.maxLength
-                    };
-                    break;
-                case 'NoCaptchaTaskProxyless':
-                    return {
-                        websiteURL:     this.params.websiteUrl,
-                        websiteKey:     this.params.websiteKey,
-                        websiteSToken:  this.params.websiteSToken
-                    };
-                    break;
-                case 'FunCaptchaTask':
-                    return {
-                        websiteURL:         this.params.websiteUrl,
-                        websitePublicKey:   this.params.websitePublicKey,
-                        proxyType:          this.params.proxyType,
-                        proxyAddress:       this.params.proxyAddress,
-                        proxyPort:          this.params.proxyPort,
-                        proxyLogin:         this.params.proxyLogin,
-                        proxyPassword:      this.params.proxyPassword,
-                        userAgent:          this.params.userAgent,
-                        cookies:            this.params.cookies
-                    };
-                    break;
-                default: // NoCaptchaTask
-                    return {
-                        websiteURL:     this.params.websiteUrl,
-                        websiteKey:     this.params.websiteKey,
-                        websiteSToken:  this.params.websiteSToken,
-                        proxyType:      this.params.proxyType,
-                        proxyAddress:   this.params.proxyAddress,
-                        proxyPort:      this.params.proxyPort,
-                        proxyLogin:     this.params.proxyLogin,
-                        proxyPassword:  this.params.proxyPassword,
-                        userAgent:      this.params.userAgent,
-                        cookies:        this.params.cookies
-                    };
-            }
+                        $antigateSolver.text('Solved');
+                        $antigateSolver.removeClass().addClass('antigate_solver').addClass('solved');
 
+                        $gRecaptchaFrameContainer.append('DONE!');
 
-        };
+                        // console.log(taskSolution);
+                        $gRecaptchaResponse.val(taskSolution);
 
-        this.jsonPostRequest = function(methodName, postData, cb) {
-            if (!usePrecaching) {
-                if (typeof process === 'object' && typeof require === 'function') { // NodeJS
-                    var http = require('http');
+                        // CALLBACK HERE
 
-                    // http request options
-                    var options = {
-                        hostname: this.params.host,
-                        port: this.params.port,
-                        path: '/' + methodName,
-                        method: 'POST',
-                        headers: {
-                            'accept-encoding':  'gzip,deflate',
-                            'content-type':     'application/json; charset=utf-8',
-                            'accept':           'application/json',
-                            'content-length':   Buffer.byteLength(JSON.stringify(postData))
-                        }
-                    };
+                        if (typeof ___grecaptcha_cfg != 'undefined'
+                            && typeof ___grecaptcha_cfg.clients != 'undefined') {
+                            var oneVisibleRecaptchaClientKey = null;
 
-                    // console.log(options);
-                    // console.log(JSON.stringify(postData));
+                            // I know, I go to hell after this
+                            visible_recaptcha_element_search_loop:
+                                for (var i in ___grecaptcha_cfg.clients) {
+                                    for (var j in ___grecaptcha_cfg.clients[i]) {
+                                        // check if it's a DOM element within IFRAME
+                                        if (___grecaptcha_cfg.clients[i][j]
+                                            && typeof ___grecaptcha_cfg.clients[i][j].nodeName == 'string'
+                                            && typeof ___grecaptcha_cfg.clients[i][j].innerHTML == 'string'
+                                            && typeof ___grecaptcha_cfg.clients[i][j].innerHTML.indexOf('iframe') != -1) {
 
-                    var req = http.request(options, function(response) { // on response
-                        var str = '';
+                                            // console.log('That element');
+                                            // console.log(___grecaptcha_cfg.clients[i][j]);
 
-                        // another chunk of data has been recieved, so append it to `str`
-                        response.on('data', function (chunk) {
-                            str += chunk;
-                        });
+                                            // $(___grecaptcha_cfg.clients[0].Fc).is(":visible")
 
-                        // the whole response has been recieved, so we just print it out here
-                        response.on('end', function () {
-                            // console.log(str);
-
-                            try {
-                                var jsonResult = JSON.parse(str);
-                            } catch (err) {
-                                return cb(err);
-                            }
-
-                            if (jsonResult.errorId) {
-                                return cb(new Error(jsonResult.errorDescription, jsonResult.errorCode), jsonResult);
-                            }
-
-                            return cb(null, jsonResult);
-                        });
-                    });
-
-                    // send post data
-                    req.write(JSON.stringify(postData));
-                    req.end();
-
-                    // timeout in milliseconds
-                    req.setTimeout(connectionTimeout * 1000);
-                    req.on('timeout', function() {
-                        console.log('timeout');
-                        req.abort();
-                    });
-
-                    // After timeout connection throws Error, so we have to handle it
-                    req.on('error', function(err) {
-                        console.log('error');
-                        return cb(err);
-                    });
-
-                    return req;
-                } else if ((typeof window !== 'undefined' || typeof chrome === 'object') && typeof jQuery == 'function') { // in browser or chrome extension with jQuery
-                    jQuery.ajax(
-                          (window.location.protocol == 'https:' ? 'https:' : 'http:') + '//'
-                        + this.params.host
-                        + (window.location.protocol != 'https:' ? ':' + this.params.port : '')
-                        + '/' + methodName,
-                        {
-                            method: 'POST',
-                            data: JSON.stringify(postData),
-                            dataType: 'json',
-                            success: function (jsonResult) {
-                                if (jsonResult && jsonResult.errorId) {
-                                    return cb(new Error(jsonResult.errorDescription, jsonResult.errorCode), jsonResult);
+                                            // check element visibility
+                                            // $(___grecaptcha_cfg.clients[i][j]).is(":visible")
+                                            if (___grecaptcha_cfg.clients[i][j].offsetHeight != 0
+                                                || (___grecaptcha_cfg.clients[i][j].childNodes.length && ___grecaptcha_cfg.clients[i][j].childNodes[0].offsetHeight != 0)
+                                                || ___grecaptcha_cfg.clients[i][j].dataset.size == 'invisible') { // IS VISIBLE for user or IS INVISIBLE type of reCaptcha
+                                                if (oneVisibleRecaptchaClientKey === null) {
+                                                    oneVisibleRecaptchaClientKey = i;
+                                                    // only one in this level of search
+                                                    break;
+                                                } else {
+                                                    // console.log('One only one visible recaptcha, break stuff!');
+                                                    oneVisibleRecaptchaClientKey = null;
+                                                    break visible_recaptcha_element_search_loop;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
 
-                                cb(false, jsonResult);
-                            },
-                            error: function (jqXHR, textStatus, errorThrown) {
-                                cb(new Error(textStatus != 'error' ? textStatus : 'Unknown error, watch console')); // should be errorThrown
+                            // console.log('oneVisibleRecaptchaClientKey=');
+                            // console.log(oneVisibleRecaptchaClientKey);
+
+                            if (oneVisibleRecaptchaClientKey !== null) {
+                                recursiveCallbackSearch(___grecaptcha_cfg.clients[oneVisibleRecaptchaClientKey], taskSolution, 1, 2);
                             }
                         }
-                    );
-                } else {
-                    console.error('Application should be run either in NodeJs environment or has jQuery to be included');
+                        
+                        taskInProcessOfSolution = false;
+                    });
+                });
+            });
+        }, 1000);
+    }
+}, 200);
+
+function parseUrl(url)
+{
+    var parser = document.createElement('a');
+    parser.href = url;
+
+    return parser;
+
+    parser.protocol; // => "http:"
+    parser.hostname; // => "example.com"
+    parser.port;     // => "3000"
+    parser.pathname; // => "/pathname/"
+    parser.search;   // => "?search=test"
+    parser.hash;     // => "#hash"
+    parser.host;     // => "example.com:3000"
+}
+
+var recursiveCallbackSearch = function(object, solution, currentDepth, maxDepth) {
+    var passedProperties = 0;
+
+    for (var i in object) {
+//                                    try {
+//                                        if (!object.hasOwnProperty(i)) {
+//                                            continue;
+//                                        }
+//                                    } catch (e) {
+//                                    }
+
+        passedProperties++;
+
+        // do not go farther
+        if (passedProperties > 15) {
+            break;
+        }
+
+        // prevent "Failed to read the 'contentDocument' property" error
+        try {
+            if (typeof object[i] == 'object' && currentDepth <= maxDepth) { // she said not too deep
+                // console.log('RECURSIVE call for ', i);
+                recursiveCallbackSearch(object[i], solution, currentDepth + 1, maxDepth);
+            } else if (i == 'callback') {
+                if (typeof object[i] == 'function') {
+                    // console.log('CALLBACK ' + i + ' function with param +' + solution);
+                    object[i](solution);
+                    recaptchaCallbackAlreadyFired = true;
+                } else if (typeof object[i] == 'string' && typeof window[object[i]] == 'function') {
+                    // console.log('CALLBACK ' + object[i] + ' global function with param +' + solution);
+                    window[object[i]](solution);
+                    recaptchaCallbackAlreadyFired = true;
                 }
-            } else {
-                // move to subclass
-                // determinant init
-                chrome.runtime.sendMessage({
-                        type: methodName + 'PrecachedRecaptcha',
-                        postData: postData
-                    },
-                    function (jsonResult) { // err, jsonResult
-                        if (jsonResult.errorId) {
-                            return cb(new Error(jsonResult.errorDescription, jsonResult.errorCode), jsonResult);
-                        }
 
-                        return cb(null, jsonResult);
-                    }
-                );
+                // one callback in this object
+                return;
             }
-        };
-
-        this.setClientKey = function (value) {
-            this.params.clientKey = value;
-        };
-
-        //proxy access parameters
-        this.setWebsiteURL = function (value) {
-            this.params.websiteUrl = value;
-        };
-
-        this.setWebsiteKey = function (value) {
-            this.params.websiteKey = value;
-        };
-
-        this.setWebsiteSToken = function (value) {
-            this.params.websiteSToken = value;
-        };
-
-        this.setWebsitePublicKey = function (value) {
-            this.params.websitePublicKey = value;
-        };
-
-        this.setProxyType = function (value) {
-            this.params.proxyType = value;
-        };
-
-        this.setProxyAddress = function (value) {
-            this.params.proxyAddress = value;
-        };
-
-        this.setProxyPort = function (value) {
-            this.params.proxyPort = value;
-        };
-
-        this.setProxyLogin = function (value) {
-            this.params.proxyLogin = value;
-        };
-
-        this.setProxyPassword = function (value) {
-            this.params.proxyPassword = value;
-        };
-
-        this.setUserAgent = function (value) {
-            this.params.userAgent = value;
-        };
-
-        this.setCookies = function (value) {
-            this.params.cookies = value;
-        };
-
-        // image
-        this.setPhrase = function (value) {
-            this.params.phrase = value;
-        };
-
-        this.setCase = function (value) {
-            this.params.case = value;
-        };
-
-        this.setNumeric = function (value) {
-            this.params.numeric = value;
-        };
-
-        this.setMath = function (value) {
-            this.params.math = value;
-        };
-
-        this.setMinLength = function (value) {
-            this.params.minLength = value;
-        };
-
-        this.setMaxLength = function (value) {
-            this.params.maxLength = value;
-        };
-
-        this.setImageUrl = function (value) {
-            this.params.imageUrl = value;
-        };
-
-        this.setAssignment = function (value) {
-            this.params.assignment = value;
-        };
-
-        this.setForms = function (value) {
-            this.params.forms = value;
-        };
-
-        this.setSoftId = function (value) {
-            this.params.softId = value;
-        };
-
-        this.setLanguagePool = function (value) {
-            this.params.languagePool = value;
-        };
-
-        this.setHost = function (value) {
-            this.params.host = value;
-        };
-
-        this.setPort = function (value) {
-            this.params.port = value;
-        };
-
-    }(clientKey, usePrecaching);
-};
-
-if (typeof process === 'object' && typeof require === 'function') { // NodeJS
-    module.exports = Anticaptcha;
+        } catch (e) {
+        }
+    }
 }
